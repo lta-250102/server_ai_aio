@@ -1,0 +1,10 @@
+addict 
+easydict
+numpy
+matplotlib
+einops
+transformers==4.46.3
+tokenizers
+opencv-python
+bitsandbytes
+accelerate

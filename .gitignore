@@ -1,0 +1,11 @@
+*.pyc
+*.ipynb
+*_data/
+.env
+.vscode/
+*.onnx
+*.pt
+*.engine
+*.plan
+*.jpeg
+*.html

@@ -1,0 +1,7 @@
+opencv-python-headless==5.0.0.93
+# ultralytics==8.4.178
+Pillow==13.0.0
+python-multipart==0.0.32
+fastapi==0.143.2
+uvicorn==0.54.0
+tritonclient[all]==2.73.0
