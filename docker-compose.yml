@@ -365,3 +365,22 @@ services:
       - TRITON_POOL_SIZE=8
     depends_on:
       - triton
+
+  go_api:
+    build: ./go_api
+    container_name: go_api
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: 1.0
+    ports:
+      - "8090:8090"
+    environment:
+      - TRITON_HOST=triton
+      # - TRITON_POOL_SIZE=8
+      - GIN_MODE=release
+    depends_on:
+      - triton
+
