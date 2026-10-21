@@ -7,7 +7,9 @@ import (
 	"image/color"
 	"log"
 	"os"
+	"strconv"
 	"sync"
+
 	"time"
 
 	"github.com/Trendyol/go-triton-client/base"
@@ -129,28 +131,37 @@ func letterbox(img gocv.Mat) ([]float32, float64, image.Point, error) {
 	defer roi.Close()
 	resized.CopyTo(&roi)
 
-	// Chuyển sang tensor FP32 NCHW
+	// Chuyển sang tensor FP32 NCHW: dùng gocv Split + ConvertTo (vectorized C++) thay vì loop tay.
 	pixels := IMG_SIZE * IMG_SIZE
 	tensor := make([]float32, pixels*3)
 
-	// Split thành 3 channel
-	channels := gocv.Split(padded)
-	defer channels[0].Close()
-	defer channels[1].Close()
-	defer channels[2].Close()
-	ch0 := channels[0]
-	ch1 := channels[1]
-	ch2 := channels[2]
+	channels := gocv.Split(padded) // trả về []Mat — R, G, B (uint8)
 
-	// Đọc từng channel
-	data0, _ := ch0.DataPtrUint8()
-	data1, _ := ch1.DataPtrUint8()
-	data2, _ := ch2.DataPtrUint8()
+	normalized := make([]gocv.Mat, 3)
+	for i := range channels {
+		normalized[i] = gocv.NewMat()
+		// Chuyển uint8→FP32 + normalize /255 trong 1 bước C++
+		channels[i].ConvertToWithParams(&normalized[i], gocv.MatTypeCV32F, 1.0/255.0, 0)
+		channels[i].Close()
+	}
 
-	for i := 0; i < pixels; i++ {
-		tensor[i] = float32(data0[i]) / 255.0
-		tensor[pixels+i] = float32(data1[i]) / 255.0
-		tensor[pixels*2+i] = float32(data2[i]) / 255.0
+	dataPtrs := make([][]float32, 3)
+	for i := range normalized {
+		ptr, err := normalized[i].DataPtrFloat32()
+		if err != nil {
+			for _, m := range normalized {
+				m.Close()
+			}
+			return nil, 0, image.Point{}, fmt.Errorf("data ptr channel %d: %w", i, err)
+		}
+		dataPtrs[i] = ptr
+	}
+	copy(tensor[0:pixels], dataPtrs[2])          // R (byte thứ 3 trong BGR)
+	copy(tensor[pixels:2*pixels], dataPtrs[1])    // G (byte thứ 2)
+	copy(tensor[2*pixels:3*pixels], dataPtrs[0])  // B (byte thứ 1)
+
+	for i := range normalized {
+		normalized[i].Close()
 	}
 
 	return tensor, ratio, image.Point{padX, padY}, nil
@@ -181,7 +192,8 @@ func infer(ctx context.Context, tensor []float32) ([]detection, error) {
 		return nil, fmt.Errorf("parse result: %w", err)
 	}
 
-	var results []detection
+	// pre-allocate capacity — Yolo output thường có <100 detections, tránh reallocate
+	results := make([]detection, 0, 100)
 	for i := 0; i+5 < len(slice); i += 6 {
 		conf := slice[i+4]
 		if conf < 0.25 {
@@ -204,6 +216,9 @@ func drawBoxes(img gocv.Mat, detections []detection, ratio float64, padding imag
 	// Clone ảnh gốc để vẽ
 	outputImg := img.Clone()
 
+	// Reuse label buffer tránh fmt.Sprintf heap alloc
+	labelBuf := make([]byte, 0, 32)
+
 	for _, det := range detections {
 		c := _COLORS[det.classID%len(_COLORS)]
 		x1 := int((det.bbox[0] - float32(padding.X)) / float32(ratio))
@@ -211,22 +226,25 @@ func drawBoxes(img gocv.Mat, detections []detection, ratio float64, padding imag
 		x2 := int((det.bbox[2] - float32(padding.X)) / float32(ratio))
 		y2 := int((det.bbox[3] - float32(padding.Y)) / float32(ratio))
 
-		// Vẽ rectangle
+		// Vẽ rectangle outline
 		gocv.Rectangle(&outputImg, image.Rect(x1, y1, x2, y2), c, 2)
 
 		// Vẽ label background + text
-		label := CLASS_NAMES[det.classID] + " " + fmt.Sprintf("%.2f", det.confidence)
+		// Dùng strconv.AppendFloat thay fmt.Sprintf — 0 heap alloc per detection
+		labelBuf = labelBuf[:0]
+		labelBuf = append(labelBuf, CLASS_NAMES[det.classID]...)
+		labelBuf = append(labelBuf, ' ')
+		labelBuf = strconv.AppendFloat(labelBuf, float64(det.confidence), 'f', 2, 32)
+		label := string(labelBuf)
+
 		size := gocv.GetTextSize(label, gocv.FontHersheySimplex, 0.6, 1)
-		labelRect := image.Rect(x1, y1-size.Y-6, x1+size.X, y1+4)
-		pv := gocv.NewPointsVectorFromPoints([][]image.Point{{
-			{X: labelRect.Min.X, Y: labelRect.Min.Y},
-			{X: labelRect.Max.X, Y: labelRect.Min.Y},
-			{X: labelRect.Max.X, Y: labelRect.Max.Y},
-			{X: labelRect.Min.X, Y: labelRect.Max.Y},
-		}})
-		defer pv.Close()
-		gocv.FillPoly(&outputImg, pv, c)
-		gocv.PutText(&outputImg, label, image.Pt(x1, y1-int(size.Y)-2), gocv.FontHersheySimplex, 0.6, color.RGBA{R: 255, G: 255, B: 255, A: 255}, 1)
+		// labelRect = nền text, nằm trên bbox trên cùng 4px
+		labelRect := image.Rect(x1, y1-size.Y-4, x1+size.X+2, y1+4)
+
+		// Label background — RectangleWithParams thickness=-1 = filled rect, thay FillPoly
+		gocv.RectangleWithParams(&outputImg, labelRect, c, -1, gocv.Line4, 0)
+
+		gocv.PutText(&outputImg, label, image.Pt(x1+1, y1-int(size.Y)-1), gocv.FontHersheySimplex, 0.6, color.RGBA{R: 255, G: 255, B: 255, A: 255}, 1)
 	}
 
 	return outputImg
