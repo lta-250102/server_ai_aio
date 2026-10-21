@@ -1,13 +1,16 @@
-FROM golang:1.26-alpine AS builder
-RUN apk --no-cache add git
+FROM ghcr.io/hybridgroup/opencv:4.13.0 AS builder
+
+ENV GOPATH /go
+ENV CGO_ENABLED=1
+
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /go_api ./
-FROM alpine:3.20
-RUN apk --no-cache add ca-certificates
+RUN go build -ldflags="-w -s" -o /go_api ./
+
+FROM ghcr.io/hybridgroup/opencv:4.13.0
 WORKDIR /app
 COPY --from=builder /go_api /app/go_api
-EXPOSE 8080
+EXPOSE 8090
 CMD ["/app/go_api"]

@@ -1,12 +1,12 @@
 package controllers
 
 import (
-	"image"
-	"image/draw"
+	"bytes"
 
 	"go_api/services"
 
 	"github.com/gin-gonic/gin"
+	"gocv.io/x/gocv"
 )
 
 // Detect godoc: POST /yolo/detect with multipart form field "image".
@@ -19,17 +19,18 @@ func Detect(c *gin.Context) {
 	}
 	defer f.Close()
 
-	img, _, err := image.Decode(f)
-	if err != nil {
-		c.JSON(400, gin.H{"error": "invalid image: " + err.Error()})
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(f)
+
+	// Decode từ bytes sang gocv.Mat
+	img, err := gocv.IMDecode(buf.Bytes(), gocv.IMReadColor)
+	if err != nil || img.Empty() {
+		c.JSON(400, gin.H{"error": "invalid image"})
 		return
 	}
+	defer img.Close()
 
-	bounds := img.Bounds()
-	nrgbaImg := image.NewNRGBA(bounds)
-	draw.Draw(nrgbaImg, bounds, img, bounds.Min, draw.Src)
-
-	jpegBytes, err := services.Detect(c.Request.Context(), nrgbaImg)
+	jpegBytes, err := services.Detect(c.Request.Context(), img)
 	if err != nil {
 		c.JSON(500, gin.H{"error": "detection failed: " + err.Error()})
 		return

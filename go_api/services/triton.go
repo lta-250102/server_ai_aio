@@ -1,13 +1,10 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
-	"image/jpeg"
 	"log"
 	"os"
 	"sync"
@@ -15,10 +12,7 @@ import (
 
 	"github.com/Trendyol/go-triton-client/base"
 	gclient "github.com/Trendyol/go-triton-client/client/grpc"
-	"github.com/disintegration/imaging"
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/basicfont"
-	"golang.org/x/image/math/fixed"
+	"gocv.io/x/gocv"
 	"google.golang.org/grpc/keepalive"
 )
 
@@ -50,9 +44,9 @@ var CLASS_NAMES = []string{
 
 // _COLORS là màu RGB cho các classes.
 var _COLORS = []color.RGBA{
-	{255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255},
-	{255, 0, 255, 255}, {0, 255, 255, 255}, {128, 0, 128, 255}, {0, 128, 128, 255},
-	{128, 128, 0, 255}, {128, 0, 0, 255},
+	{R: 255, G: 0, B: 0, A: 255}, {R: 0, G: 255, B: 0, A: 255}, {R: 0, G: 0, B: 255, A: 255}, {R: 255, G: 255, B: 0, A: 255},
+	{R: 255, G: 0, B: 255, A: 255}, {R: 0, G: 255, B: 255, A: 255}, {R: 128, G: 0, B: 128, A: 255}, {R: 0, G: 128, B: 128, A: 255},
+	{R: 128, G: 128, B: 0, A: 255}, {R: 128, G: 0, B: 0, A: 255},
 }
 
 // tritonClient là singleton gRPC client (raw base.Client).
@@ -60,9 +54,6 @@ var (
 	tritonClient base.Client
 	clientOnce   sync.Once
 )
-
-// face là font face dùng chung (7x13 pixels, có sẵn trong thư viện).
-var face = basicfont.Face7x13
 
 // InitTritonPool khởi tạo singleton pool. Gọi 1 lần khi app start.
 func InitTritonPool() error {
@@ -87,7 +78,7 @@ func InitTritonPool() error {
 }
 
 // Detect thực hiện inference YOLO và trả về ảnh JPEG với bounding boxes.
-func Detect(ctx context.Context, img *image.NRGBA) ([]byte, error) {
+func Detect(ctx context.Context, img gocv.Mat) ([]byte, error) {
 	// 1. Letterbox: resize + padding
 	tensor, ratio, padding, err := letterbox(img)
 	if err != nil {
@@ -101,9 +92,8 @@ func Detect(ctx context.Context, img *image.NRGBA) ([]byte, error) {
 	}
 
 	// 3. Vẽ boxes lên ảnh gốc
-	rgbaImg := image.NewRGBA(img.Bounds())
-	draw.Draw(rgbaImg, img.Bounds(), img, image.Point{}, draw.Src)
-	outputImg := drawBoxes(rgbaImg, detections, ratio, padding)
+	outputImg := drawBoxes(img, detections, ratio, padding)
+	defer outputImg.Close()
 
 	// 4. Encode JPEG
 	return encodeJPEG(outputImg)
@@ -111,11 +101,10 @@ func Detect(ctx context.Context, img *image.NRGBA) ([]byte, error) {
 
 // --- Internal helpers ---
 
-func letterbox(img *image.NRGBA) ([]float32, float64, image.Point, error) {
+func letterbox(img gocv.Mat) ([]float32, float64, image.Point, error) {
 	const IMG_SIZE = 640
-	bounds := img.Bounds()
-	origW := bounds.Dx()
-	origH := bounds.Dy()
+	origW := img.Cols()
+	origH := img.Rows()
 	ratio := float64(IMG_SIZE) / float64(origW)
 	if r2 := float64(IMG_SIZE) / float64(origH); r2 < ratio {
 		ratio = r2
@@ -123,39 +112,45 @@ func letterbox(img *image.NRGBA) ([]float32, float64, image.Point, error) {
 	newW := int(float64(origW) * ratio)
 	newH := int(float64(origH) * ratio)
 
-	resized := imaging.Resize(img, newW, newH, imaging.Box)
+	// Resize với INTER_AREA (tương đương cv2.INTER_AREA trong Python)
+	resized := gocv.NewMat()
+	defer resized.Close()
+	gocv.Resize(img, &resized, image.Pt(newW, newH), 0, 0, gocv.InterpolationArea)
+
+	// Tạo ảnh trắng padding (128,128,128)
+	padded := gocv.NewMatWithSizeFromScalar(gocv.NewScalar(128, 128, 128, 0), IMG_SIZE, IMG_SIZE, gocv.MatTypeCV8UC3)
+	defer padded.Close()
 
 	padX := (IMG_SIZE - newW) / 2
 	padY := (IMG_SIZE - newH) / 2
-	padded := image.NewNRGBA(image.Rect(0, 0, IMG_SIZE, IMG_SIZE))
-	for y := 0; y < IMG_SIZE; y++ {
-		for x := 0; x < IMG_SIZE; x++ {
-			idx := y*IMG_SIZE*4 + x*4
-			padded.Pix[idx] = 128
-			padded.Pix[idx+1] = 128
-			padded.Pix[idx+2] = 128
-			padded.Pix[idx+3] = 255
-		}
-	}
-	for y := 0; y < newH; y++ {
-		for x := 0; x < newW; x++ {
-			padded.Set(x+padX, y+padY, resized.At(x, y))
-		}
-	}
+
+	// Cắt vùng padding để paste resized vào
+	roi := padded.Region(image.Rect(padX, padY, padX+newW, padY+newH))
+	defer roi.Close()
+	resized.CopyTo(&roi)
 
 	// Chuyển sang tensor FP32 NCHW
 	pixels := IMG_SIZE * IMG_SIZE
 	tensor := make([]float32, pixels*3)
 
-	for y := 0; y < IMG_SIZE; y++ {
-		for x := 0; x < IMG_SIZE; x++ {
-			pixIdx := y*IMG_SIZE*4 + x*4
-			// NCHW: C * H * W + H * W + W * y + x
-			idx := y*IMG_SIZE + x
-			tensor[idx] = float32(padded.Pix[pixIdx]) / 255.0
-			tensor[pixels+idx] = float32(padded.Pix[pixIdx+1]) / 255.0
-			tensor[pixels*2+idx] = float32(padded.Pix[pixIdx+2]) / 255.0
-		}
+	// Split thành 3 channel
+	channels := gocv.Split(padded)
+	defer channels[0].Close()
+	defer channels[1].Close()
+	defer channels[2].Close()
+	ch0 := channels[0]
+	ch1 := channels[1]
+	ch2 := channels[2]
+
+	// Đọc từng channel
+	data0, _ := ch0.DataPtrUint8()
+	data1, _ := ch1.DataPtrUint8()
+	data2, _ := ch2.DataPtrUint8()
+
+	for i := 0; i < pixels; i++ {
+		tensor[i] = float32(data0[i]) / 255.0
+		tensor[pixels+i] = float32(data1[i]) / 255.0
+		tensor[pixels*2+i] = float32(data2[i]) / 255.0
 	}
 
 	return tensor, ratio, image.Point{padX, padY}, nil
@@ -205,68 +200,43 @@ func infer(ctx context.Context, tensor []float32) ([]detection, error) {
 	return results, nil
 }
 
-func drawBoxes(img *image.RGBA, detections []detection, ratio float64, padding image.Point) *image.RGBA {
-	output := image.NewRGBA(img.Bounds())
-	draw.Draw(output, img.Bounds(), img, image.Point{0, 0}, draw.Src)
+func drawBoxes(img gocv.Mat, detections []detection, ratio float64, padding image.Point) gocv.Mat {
+	// Clone ảnh gốc để vẽ
+	outputImg := img.Clone()
 
 	for _, det := range detections {
 		c := _COLORS[det.classID%len(_COLORS)]
-		x1 := (det.bbox[0] - float32(padding.X)) / float32(ratio)
-		y1 := (det.bbox[1] - float32(padding.Y)) / float32(ratio)
-		x2 := (det.bbox[2] - float32(padding.X)) / float32(ratio)
-		y2 := (det.bbox[3] - float32(padding.Y)) / float32(ratio)
+		x1 := int((det.bbox[0] - float32(padding.X)) / float32(ratio))
+		y1 := int((det.bbox[1] - float32(padding.Y)) / float32(ratio))
+		x2 := int((det.bbox[2] - float32(padding.X)) / float32(ratio))
+		y2 := int((det.bbox[3] - float32(padding.Y)) / float32(ratio))
 
-		drawRect(output, image.Point{int(x1), int(y1)}, image.Point{int(x2), int(y2)}, c, 2)
+		// Vẽ rectangle
+		gocv.Rectangle(&outputImg, image.Rect(x1, y1, x2, y2), c, 2)
 
+		// Vẽ label background + text
 		label := CLASS_NAMES[det.classID] + " " + fmt.Sprintf("%.2f", det.confidence)
-		tw := measureTextWidth(label)
-		th := face.Metrics().Height.Ceil()
-		drawRect(output,
-			image.Point{int(x1), int(y1) - th - 6},
-			image.Point{int(x1) + tw, int(y1) + 4},
-			c, -1)
-		putText(output, label, image.Point{int(x1), int(y1) - th - 2}, color.RGBA{255, 255, 255, 255})
+		size := gocv.GetTextSize(label, gocv.FontHersheySimplex, 0.6, 1)
+		labelRect := image.Rect(x1, y1-size.Y-6, x1+size.X, y1+4)
+		pv := gocv.NewPointsVectorFromPoints([][]image.Point{{
+			{X: labelRect.Min.X, Y: labelRect.Min.Y},
+			{X: labelRect.Max.X, Y: labelRect.Min.Y},
+			{X: labelRect.Max.X, Y: labelRect.Max.Y},
+			{X: labelRect.Min.X, Y: labelRect.Max.Y},
+		}})
+		defer pv.Close()
+		gocv.FillPoly(&outputImg, pv, c)
+		gocv.PutText(&outputImg, label, image.Pt(x1, y1-int(size.Y)-2), gocv.FontHersheySimplex, 0.6, color.RGBA{R: 255, G: 255, B: 255, A: 255}, 1)
 	}
-	return output
+
+	return outputImg
 }
 
-func measureTextWidth(text string) int {
-	return int(font.MeasureString(face, text).Ceil())
-}
-
-func drawRect(img *image.RGBA, pt1, pt2 image.Point, c color.RGBA, thickness int) {
-	for x := pt1.X; x <= pt2.X; x++ {
-		for y := 0; y < thickness; y++ {
-			if py := pt1.Y + y; py >= 0 && py < img.Bounds().Dy() {
-				img.Set(x, py, c)
-				img.Set(x, pt2.Y+y, c)
-			}
-		}
-	}
-	for y := pt1.Y; y <= pt2.Y; y++ {
-		for x := 0; x < thickness; x++ {
-			if px := pt1.X + x; px >= 0 && px < img.Bounds().Dx() {
-				img.Set(px, y, c)
-				img.Set(pt2.X+x, y, c)
-			}
-		}
-	}
-}
-
-func putText(img *image.RGBA, text string, pt image.Point, c color.RGBA) {
-	d := &font.Drawer{
-		Dst:  img,
-		Src:  image.NewUniform(c),
-		Face: face,
-		Dot:  fixed.Point26_6{X: fixed.I(pt.X), Y: fixed.I(pt.Y)},
-	}
-	d.DrawString(text)
-}
-
-func encodeJPEG(img image.Image) ([]byte, error) {
-	buf := new(bytes.Buffer)
-	if err := jpeg.Encode(buf, img, &jpeg.Options{Quality: 90}); err != nil {
+func encodeJPEG(img gocv.Mat) ([]byte, error) {
+	buf, err := gocv.IMEncode(gocv.JPEGFileExt, img)
+	if err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	defer buf.Close()
+	return buf.GetBytes(), nil
 }
