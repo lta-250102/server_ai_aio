@@ -12,7 +12,6 @@ router = APIRouter(prefix="/yolo", tags=["yolo"])
 async def health_check(client = Depends(get_triton_client)):
     return {m: "healthy" if await client.is_model_ready(m) else "unhealthy" for m in ("yolo_det", "yolo_seg")}
 
-
 @router.post("/detect")
 async def detect(image: UploadFile = File(...), client = Depends(get_triton_client)):
     file_bytes = await image.read()

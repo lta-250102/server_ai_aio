@@ -1,11 +1,40 @@
-from fastapi import Request
+from fastapi import Depends, HTTPException, Header, Request
 from services import get_triton_client as get_cached_triton_client
+import tritonclient.grpc.aio as grpcclient
+from pymongo import MongoClient
+from models.entity import User
+from db import get_user
+from agents import get_agent, agent_map
+from langgraph.graph.state import CompiledStateGraph
 
 
-async def get_triton_client(request: Request):
+async def get_triton_client(request: Request) -> grpcclient.InferenceServerClient:
     """
     Dependency lấy pool từ app.state, mượn 1 client và tự động trả lại
     sau khi endpoint xử lý xong request.
     """
-    # return request.app.state.triton_client.get_client()
-    return get_cached_triton_client()
+    return request.app.state.triton_client.get_client() # pool
+    # return get_cached_triton_client() # singleton
+
+async def get_mongo_client(request: Request) -> MongoClient:
+    return request.app.state.mongo_client
+
+async def get_current_user(x_user_id: str = Header(...), mongo_client: MongoClient = Depends(get_mongo_client)) -> User:
+    """FastAPI dependency: validate user_id from header and return user."""
+    user = get_user(x_user_id, mongo_client)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or missing user_id")
+    return user
+
+def get_metadata_from_user(user: User) -> dict:
+    return {
+        "user_id": user.id, 
+        "user_name": user.user_name, 
+        "user_email": user.user_email, 
+        "n_games": len(user.games)
+    }
+
+def get_ai_agent(x_agent_name: str = Header(...)) -> CompiledStateGraph:
+    if x_agent_name not in agent_map:
+        raise HTTPException(status_code=400, detail=f"Unknown agent: {x_agent_name}")
+    return get_agent(x_agent_name)

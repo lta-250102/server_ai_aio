@@ -363,24 +363,37 @@ services:
     environment:
       - TRITON_HOST=triton
       - TRITON_POOL_SIZE=8
+      - LLM_URL=${LLM_URL}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - GROWX_MCP_SERVER=${GROWX_MCP_SERVER}
+      - GROWX_MCP_TOKEN=${GROWX_MCP_TOKEN}
+      - MONGO_CONNECTION_STRING=${MONGO_CONNECTION_STRING}
+      - MONGO_DB_NAME=${MONGO_DB_NAME}
+      - BYTEHOUSE_KEY=${BYTEHOUSE_KEY}
+      - FALCON_DATA_MCP=${FALCON_DATA_MCP}
+      - FALCON_DATA_MCP_TOKEN=${FALCON_DATA_MCP_TOKEN}
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}
+      - MLFLOW_TRACKING_USERNAME=${MLFLOW_TRACKING_USERNAME}
+      - MLFLOW_TRACKING_PASSWORD=${MLFLOW_TRACKING_PASSWORD}
+      - MLFLOW_WORKSPACE=${MLFLOW_WORKSPACE}
     depends_on:
       - triton
 
-  go_api:
-    build: ./go_api
-    container_name: go_api
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: 1.0
-    ports:
-      - "8090:8090"
-    environment:
-      - TRITON_HOST=triton
-      # - TRITON_POOL_SIZE=8
-      - GIN_MODE=release
-    depends_on:
-      - triton
+  # go_api:
+  #   build: ./go_api
+  #   container_name: go_api
+  #   restart: unless-stopped
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 2G
+  #         cpus: 1.0
+  #   ports:
+  #     - "8090:8090"
+  #   environment:
+  #     - TRITON_HOST=triton
+  #     # - TRITON_POOL_SIZE=8
+  #     - GIN_MODE=release
+  #   depends_on:
+  #     - triton
 

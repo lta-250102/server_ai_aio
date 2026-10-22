@@ -19,6 +19,10 @@ class TritonClient:
             client = grpcclient.InferenceServerClient(url=self.url)
             self._clients.append(client)
 
+    async def health_check(self):
+        """Check is server ready for all client, recreate client if false"""
+        pass
+
     def get_client(self) -> grpcclient.InferenceServerClient:
         """
         Lấy ngẫu nhiên 1 client từ Pool (KHÔNG LOCK, KHÔNG WAIT).
@@ -31,7 +35,7 @@ class TritonClient:
         for client in self._clients:
             await client.close()
 
-
+# use this if singleton insteaded of pool
 @lru_cache(maxsize=1)
 def get_triton_client(url: str = f"{TRITON_HOST}:8001"):
     return grpcclient.InferenceServerClient(url=url)
