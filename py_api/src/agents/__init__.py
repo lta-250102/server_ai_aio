@@ -10,7 +10,6 @@ from .ua_agent import (
     Context as ua_agent_context,
     State as ua_agent_State,
 )
-from .tools import set_ch_client
 from pymongo import MongoClient
 
 

@@ -16,26 +16,6 @@ import asyncio
 logger = logging.getLogger("pyapi")
 
 
-# Global ClickHouse client (initialized in lifespan, closed in shutdown)
-_ch_client: ChClient | None = None
-
-
-def set_ch_client(client: ChClient) -> None:
-    """Set the global ClickHouse client pool. Called during app startup."""
-    global _ch_client
-    _ch_client = client
-
-
-def get_ch_client() -> ChClient:
-    """Get the global ClickHouse client pool. Must be initialized in lifespan first."""
-    if _ch_client is None:
-        raise RuntimeError(
-            "ClickHouse client not initialized. "
-            "Ensure it is set in the lifespan startup phase."
-        )
-    return _ch_client
-
-
 # HTTP client for growX MCP server
 _GROWX_URL = os.getenv("GROWX_MCP_SERVER", "https://growx-dev.falcongames.com/grow-x/api/v1/mcp")
 _GROWX_TOKEN = os.getenv("GROWX_MCP_TOKEN", "")
@@ -354,10 +334,10 @@ def query_sql(sql: str, runtime: ToolRuntime[UserContext]) -> dict:
                 "error": f"SQL query references games not assigned to user. Disallowed: {sorted(disallowed)}. Allowed: {sorted(allowed_values)}",
             }
 
-    ch = get_ch_client()
+    ch_client = ChClient.from_url(f"clickhouse://bytehouse:{os.getenv('BYTEHOUSE_KEY')}@gateway.aws-us-east-1.bytehouse.cloud:19000/?secure=true&max_execution_time=60")
     logger.debug("query_sql_executing", extra={"sql": sql[:200]})
     try:
-        data, info = ch.execute(sql, with_column_types=True)
+        data, info = ch_client.execute(sql, with_column_types=True)
         cols = [c[0] for c in info]
         row_count = len(data)
         logger.info("query_sql_success", extra={"rows": row_count, "columns": len(cols)})
