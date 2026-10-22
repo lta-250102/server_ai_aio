@@ -1,3 +1,4 @@
+import logging
 from langchain_openai import ChatOpenAI
 from deepagents import create_deep_agent, FilesystemPermission
 from deepagents.backends import CompositeBackend, StateBackend, FilesystemBackend
@@ -12,6 +13,8 @@ from .ua_agent import (
 from .tools import set_ch_client
 from pymongo import MongoClient
 
+
+logger = logging.getLogger("pyapi")
 
 agent_map = {
     "ua_agent": {
@@ -36,31 +39,38 @@ agent_map = {
 
 async def init_agent(agent_name: str, mongo_client: MongoClient):
     """Build and return an agent. Intended to be called during startup only."""
-    agent_conf = agent_map[agent_name]
-    skill_dir = os.path.join(os.path.dirname(__file__), "skills", agent_name)
+    logger.info("agent_init_start", extra={"agent_name": agent_name})
+    try:
+        agent_conf = agent_map[agent_name]
+        skill_dir = os.path.join(os.path.dirname(__file__), "skills", agent_name)
 
-    return create_deep_agent(
-        system_prompt=agent_conf["system_prompt"],
-        model=agent_conf["model"], 
-        checkpointer=MongoDBSaver(client=mongo_client, db_name=os.getenv("MONGO_DB_NAME", "growx_agent"), ttl=30*24*60*60),
-        backend=CompositeBackend(
-            default=StateBackend(), 
-            routes={
-                "/skills/": FilesystemBackend(
-                    root_dir=skill_dir,
-                    virtual_mode=True,
-                ),
-            },
-        ),
-        skills=["/skills/"],
-        tools=agent_conf["tools"],
-        context_schema=agent_conf["context_schema"],
-        state_schema=agent_conf["state_schema"],
-        permissions=[
-            FilesystemPermission(
-                operations=["write"],
-                paths=["/skills/"],
-                mode="deny"
-            )
-        ],
-    )
+        agent = create_deep_agent(
+            system_prompt=agent_conf["system_prompt"],
+            model=agent_conf["model"],
+            checkpointer=MongoDBSaver(client=mongo_client, db_name=os.getenv("MONGO_DB_NAME", "growx_agent"), ttl=30*24*60*60),
+            backend=CompositeBackend(
+                default=StateBackend(),
+                routes={
+                    "/skills/": FilesystemBackend(
+                        root_dir=skill_dir,
+                        virtual_mode=True,
+                    ),
+                },
+            ),
+            skills=["/skills/"],
+            tools=agent_conf["tools"],
+            context_schema=agent_conf["context_schema"],
+            state_schema=agent_conf["state_schema"],
+            permissions=[
+                FilesystemPermission(
+                    operations=["write"],
+                    paths=["/skills/"],
+                    mode="deny"
+                )
+            ],
+        )
+        logger.info("agent_init_success", extra={"agent_name": agent_name})
+        return agent
+    except Exception as e:
+        logger.error("agent_init_error", extra={"agent_name": agent_name, "error": str(e)}, exc_info=True)
+        raise

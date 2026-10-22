@@ -1,8 +1,10 @@
+import logging
 import tritonclient.grpc.aio as grpcclient
 import numpy as np
 import cv2
 
 
+logger = logging.getLogger("pyapi")
 CLASS_NAMES = {
     0: "person", 1: "bicycle", 2: "car", 3: "motorcycle",
     4: "airplane", 5: "bus", 6: "train", 7: "truck",
@@ -85,10 +87,16 @@ def _draw_boxes(image: np.ndarray, detections: np.ndarray, orig_size: tuple, rat
 
 async def detect_image(orig: np.ndarray, client: grpcclient.InferenceServerClient) -> np.ndarray:
     """Detect objects in a RGB numpy array. Returns RGB numpy array with boxes drawn."""
+    h, w = orig.shape[:2]
     tensor, ratio, padding = _letterbox(orig)
     inputs = [grpcclient.InferInput("images", tensor.shape, "FP32")]
     inputs[0].set_data_from_numpy(tensor)
     outputs = [grpcclient.InferRequestedOutput("output0")]
     resp = await client.infer(model_name="yolo_det", inputs=inputs, outputs=outputs)
     detections = resp.as_numpy("output0")
-    return _draw_boxes(orig, detections, (orig.shape[1], orig.shape[0]), ratio, padding)
+    result = _draw_boxes(orig, detections, (w, h), ratio, padding)
+    # Count detected boxes
+    detections = np.squeeze(detections, axis=0)
+    num_detections = sum(1 for row in detections if row[5] >= 0.25)
+    logger.info("yolo_detect_infer", extra={"image_size": f"{w}x{h}", "detections": num_detections})
+    return result

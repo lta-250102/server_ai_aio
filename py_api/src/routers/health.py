@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Request
 from typing import Dict, Any
 import os
+import logging
+
+logger = logging.getLogger("pyapi")
 
 
 router = APIRouter(tags=["health"])
@@ -32,21 +35,15 @@ async def health_check(request: Request):
     health = {"status": "healthy", "checks": {}}
     all_healthy = True
 
-    # --- Triton check ---
-    triton_health: Dict[str, Any] = {"status": "healthy", "models": {}}
+    # --- Triton check (delegate to TritonClient.get_health) ---
     try:
         triton_client = request.app.state.triton_client
-        for model_name in ("yolo_det", "yolo_seg"):
-            is_ready = await triton_client.is_model_ready(model_name)
-            triton_health["models"][model_name] = "ready" if is_ready else "not_ready"
-            if not is_ready:
-                triton_health["status"] = "unhealthy"
-                all_healthy = False
+        triton_health = await triton_client.get_health()
+        if triton_health["status"] != "healthy":
+            all_healthy = False
     except Exception as e:
-        triton_health["status"] = "unhealthy"
-        triton_health["error"] = str(e)
+        triton_health = {"status": "unhealthy", "error": str(e)}
         all_healthy = False
-
     health["checks"]["triton"] = triton_health
 
     # --- MongoDB check ---
@@ -78,7 +75,7 @@ async def health_check(request: Request):
 
     health["checks"]["clickhouse"] = ch_health
 
-    # --- LLM check (lightweight connection check, non-blocking) ---
+    # --- LLM check (lightweight model list, non-blocking) ---
     llm_health: Dict[str, Any] = {"status": "healthy"}
     try:
         llm_url = os.getenv("LLM_URL")
@@ -91,13 +88,8 @@ async def health_check(request: Request):
             import httpx
 
             with httpx.Client(verify=True, timeout=5) as client:
-                resp = client.post(
-                    llm_url,
-                    json={
-                        "model": "falcon-llm",
-                        "messages": [{"role": "user", "content": "test"}],
-                        "max_tokens": 1,
-                    },
+                resp = client.get(
+                    f"{llm_url}/models",
                     headers={"Authorization": f"Bearer {llm_key}"},
                 )
                 if resp.status_code != 200:
@@ -114,5 +106,6 @@ async def health_check(request: Request):
     # Set overall status
     if not all_healthy:
         health["status"] = "degraded"
+        logger.warning("health_check_degraded", extra={"status": "degraded", "checks": health["checks"]})
 
     return health

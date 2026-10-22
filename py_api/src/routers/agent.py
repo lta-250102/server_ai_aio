@@ -1,4 +1,5 @@
 import json
+import logging
 from utils import make_serializable
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from .depends import get_current_user, get_metadata_from_user, get_ai_agent
@@ -8,6 +9,8 @@ from models.dto import ListThreadsResponse, ChatRequest, ThreadDTO
 from langgraph.graph.state import CompiledStateGraph
 from fastapi.responses import StreamingResponse
 import asyncio
+
+logger = logging.getLogger("pyapi")
 
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -35,31 +38,39 @@ async def list_threads(
     [["64f123abc456def789012", "Phân tích ROAS campaign A"], ["64f123abc456def789013", "Daily UA report"]]
     ```
     """
-    user_id = user.id
-    checkpointer = agent.checkpointer
-    user_checkpoints: list[CheckpointTuple] = list(checkpointer.list(config=None, filter={"user_id": user_id}))
+    logger.info("list_threads_start", extra={"user_id": user.id, "skip": skip, "limit": limit})
+    try:
+        user_id = user.id
+        checkpointer = agent.checkpointer
+        user_checkpoints: list[CheckpointTuple] = list(checkpointer.list(config=None, filter={"user_id": user_id}))
 
-    # Keep only the latest checkpoint for each thread
-    thread_latest = {}
-    for a in user_checkpoints:
-        thread_id = a.config["configurable"]["thread_id"]
-        ts = a.checkpoint["ts"]
-        if thread_id not in thread_latest or ts > thread_latest[thread_id].checkpoint["ts"]:
-            thread_latest[thread_id] = a
+        # Keep only the latest checkpoint for each thread
+        thread_latest = {}
+        for a in user_checkpoints:
+            thread_id = a.config["configurable"]["thread_id"]
+            ts = a.checkpoint["ts"]
+            if thread_id not in thread_latest or ts > thread_latest[thread_id].checkpoint["ts"]:
+                thread_latest[thread_id] = a
 
-    # Get unique configs (latest checkpoint per thread)
-    user_checkpoints: list[CheckpointTuple] = list(thread_latest.values())
-    user_checkpoints.sort(key=lambda x: x.checkpoint["ts"], reverse=True)
-    total = len(user_checkpoints)
-    items = [
-        ThreadDTO(
-            thread_id=checkpoint.config["configurable"]["thread_id"],
-            thread_name=agent.get_state(config=checkpoint.config).values.get("thread_name"),
-            updated_at=checkpoint.checkpoint["ts"]
-        ) 
-        for checkpoint in user_checkpoints[skip : skip + limit]
-    ]
-    return ListThreadsResponse(total=total, items=items)
+        # Get unique configs (latest checkpoint per thread)
+        user_checkpoints: list[CheckpointTuple] = list(thread_latest.values())
+        user_checkpoints.sort(key=lambda x: x.checkpoint["ts"], reverse=True)
+        total = len(user_checkpoints)
+        items = [
+            ThreadDTO(
+                thread_id=checkpoint.config["configurable"]["thread_id"],
+                thread_name=agent.get_state(config=checkpoint.config).values.get("thread_name"),
+                updated_at=checkpoint.checkpoint["ts"]
+            )
+            for checkpoint in user_checkpoints[skip : skip + limit]
+        ]
+        logger.info("list_threads_success", extra={"user_id": user_id, "total": total})
+        return ListThreadsResponse(total=total, items=items)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("list_threads_error", extra={"user_id": user.id, "error": str(e)}, exc_info=True)
+        raise
 
 @router.get(path="/threads/{id}")
 async def get_thread(
@@ -82,24 +93,34 @@ async def get_thread(
     [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi!"}]
     ```
     """
-    config = {
-        "configurable": {"thread_id": id}, 
-        "metadata": get_metadata_from_user(user),
-    }
-    snapshot = await agent.aget_state(config=config)
-    if snapshot.created_at is None:
-        raise HTTPException(status_code=404, detail="Thread not found!")
-    thread_user_id = snapshot.metadata.get("user_id")
-    if thread_user_id != user.id:
-        raise HTTPException(status_code=403, detail="Not authorized to get this thread")
-    
-    history = snapshot.values.get("messages", [])
-    return history
+    logger.info("get_thread_start", extra={"user_id": user.id, "thread_id": id})
+    try:
+        config = {
+            "configurable": {"thread_id": id},
+            "metadata": get_metadata_from_user(user),
+        }
+        snapshot = await agent.aget_state(config=config)
+        if snapshot.created_at is None:
+            logger.warning("thread_not_found", extra={"user_id": user.id, "thread_id": id})
+            raise HTTPException(status_code=404, detail="Thread not found!")
+        thread_user_id = snapshot.metadata.get("user_id")
+        if thread_user_id != user.id:
+            logger.warning("thread_access_denied", extra={"user_id": user.id, "thread_id": id})
+            raise HTTPException(status_code=403, detail="Not authorized to get this thread")
+
+        history = snapshot.values.get("messages", [])
+        logger.info("get_thread_success", extra={"user_id": user.id, "thread_id": id, "msg_count": len(history)})
+        return history
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("get_thread_error", extra={"user_id": user.id, "thread_id": id, "error": str(e)}, exc_info=True)
+        raise
 
 @router.patch(path="/threads/rename/{id}")
 async def rename_thread(
     id: str, new_name: str, 
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user), 
     agent: CompiledStateGraph = Depends(get_ai_agent), 
 ):
     """Rename a thread.
@@ -109,24 +130,34 @@ async def rename_thread(
     - `new_name` (str) — New thread name
     - `x-user-id` (str) — Header: MongoDB ObjectId of the user
     """
-    # Verify thread belongs to user
-    config = {
-        "configurable": {"thread_id": id}, 
-        "metadata": get_metadata_from_user(user),
-    }
-    snapshot = await agent.aget_state(config=config)
-    if snapshot.created_at is None:
-        raise HTTPException(status_code=404, detail="Thread not found!")
-    thread_user_id = snapshot.metadata.get("user_id")
-    if thread_user_id != user.id:
-        raise HTTPException(status_code=403, detail="Not authorized to rename this thread")
+    logger.info("rename_thread_start", extra={"user_id": user.id, "thread_id": id})
+    try:
+        # Verify thread belongs to user
+        config = {
+            "configurable": {"thread_id": id},
+            "metadata": get_metadata_from_user(user),
+        }
+        snapshot = await agent.aget_state(config=config)
+        if snapshot.created_at is None:
+            logger.warning("thread_not_found", extra={"user_id": user.id, "thread_id": id})
+            raise HTTPException(status_code=404, detail="Thread not found!")
+        thread_user_id = snapshot.metadata.get("user_id")
+        if thread_user_id != user.id:
+            logger.warning("thread_access_denied", extra={"user_id": user.id, "thread_id": id})
+            raise HTTPException(status_code=403, detail="Not authorized to rename this thread")
 
-    agent.update_state(config=config, values={"thread_name": new_name})
+        agent.update_state(config=config, values={"thread_name": new_name})
+        logger.info("rename_thread_success", extra={"user_id": user.id, "thread_id": id})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("rename_thread_error", extra={"user_id": user.id, "thread_id": id, "error": str(e)}, exc_info=True)
+        raise
 
 @router.delete(path="/threads/{id}")
 async def delete_thread(
     id: str, 
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user), 
     agent: CompiledStateGraph = Depends(get_ai_agent), 
 ):
     """Delete thread by id.
@@ -144,27 +175,37 @@ async def delete_thread(
     {"ok": true}
     ```
     """
-    # Verify thread belongs to user
-    config = {
-        "configurable": {"thread_id": id}, 
-        "metadata": get_metadata_from_user(user),
-    }
-    snapshot = await agent.aget_state(config=config)
-    if snapshot.created_at is None:
-        raise HTTPException(status_code=404, detail="Thread not found!")
-    thread_user_id = snapshot.metadata.get("user_id")
-    if thread_user_id != user.id:
-        raise HTTPException(status_code=403, detail="Not authorized to delete this thread")
+    logger.info("delete_thread_start", extra={"user_id": user.id, "thread_id": id})
+    try:
+        # Verify thread belongs to user
+        config = {
+            "configurable": {"thread_id": id},
+            "metadata": get_metadata_from_user(user),
+        }
+        snapshot = await agent.aget_state(config=config)
+        if snapshot.created_at is None:
+            logger.warning("thread_not_found", extra={"user_id": user.id, "thread_id": id})
+            raise HTTPException(status_code=404, detail="Thread not found!")
+        thread_user_id = snapshot.metadata.get("user_id")
+        if thread_user_id != user.id:
+            logger.warning("thread_access_denied", extra={"user_id": user.id, "thread_id": id})
+            raise HTTPException(status_code=403, detail="Not authorized to delete this thread")
 
-    await agent.checkpointer.adelete_thread(thread_id=id)
-    return {"ok": True}
+        await agent.checkpointer.adelete_thread(thread_id=id)
+        logger.info("delete_thread_success", extra={"user_id": user.id, "thread_id": id})
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("delete_thread_error", extra={"user_id": user.id, "thread_id": id, "error": str(e)}, exc_info=True)
+        raise
 
-     
+
 @router.post("/chat")
 async def chat(
     request: Request, req: ChatRequest, 
     user: User = Depends(get_current_user), 
-    x_growx_mcp_personal_key: str = Header(...),
+    x_growx_mcp_personal_key: str = Header(...), 
     agent: CompiledStateGraph = Depends(get_ai_agent), 
 ):
     """Chat with UA agent. Sends messages and returns AI response.
@@ -182,6 +223,7 @@ async def chat(
     {"thread_id": "xyz789", "messages": [{"role": "user", "content": "Phân tích ROAS campaign A"}], "stream": false}
     ```
     """
+    logger.info("chat_start", extra={"user_id": user.id, "thread_id": req.thread_id, "msg_count": len(req.messages), "stream": req.stream})
     try:
         context = agent.context_schema(user_id=user.id, games=user.games, growx_mcp_personal_key=x_growx_mcp_personal_key)
         config = {
@@ -193,8 +235,9 @@ async def chat(
         input = {"messages": [{"role": m.role, "content": m.content} for m in req.messages], "thread_name": thread_name}
 
         if state_snapshot.created_at is not None and state_snapshot.metadata.get("user_id") != user.id:
+            logger.warning("chat_access_denied", extra={"user_id": user.id, "thread_id": req.thread_id})
             raise HTTPException(status_code=403, detail="Not authorized to get this thread")
-            
+
         # --- Stream mode (Streamable HTTP) ---
         if req.stream:
             async def event_generator():
@@ -230,6 +273,7 @@ async def chat(
                         serializable_event = make_serializable(event)
                         yield f"data: {json.dumps(serializable_event)}\n\n"
                 except Exception as e:
+                    logger.error("chat_stream_error", extra={"user_id": user.id, "thread_id": req.thread_id, "error": str(e)}, exc_info=True)
                     yield f"data: {json.dumps({'error': str(e)})}\n\n"
                     raise e
                 finally:
@@ -242,12 +286,16 @@ async def chat(
                         return_exceptions=True,
                     )
 
+            logger.info("chat_stream_start", extra={"user_id": user.id, "thread_id": req.thread_id})
             return StreamingResponse(event_generator(), media_type="text/event-stream")
 
         # --- Non-stream mode ---
         response = await agent.ainvoke(input, config=config, context=context)
+        logger.info("chat_success", extra={"user_id": user.id, "thread_id": req.thread_id})
         return response
     except HTTPException as e:
-        raise e
+        logger.warning("chat_http_error", extra={"user_id": user.id, "thread_id": req.thread_id, "status_code": e.status_code, "detail": e.detail})
+        raise
     except Exception as e:
+        logger.error("chat_crash", extra={"user_id": user.id, "thread_id": req.thread_id, "error": str(e)}, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

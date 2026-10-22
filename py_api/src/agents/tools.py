@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Any
 from clickhouse_driver import Client as ChClient
@@ -11,6 +12,8 @@ from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from langchain.mcp import MCPAdapter
 import asyncio
+
+logger = logging.getLogger("pyapi")
 
 
 # Global ClickHouse client (initialized in lifespan, closed in shutdown)
@@ -43,6 +46,7 @@ FALCON_DATA_MCP_TOKEN = os.getenv("FALCON_DATA_MCP_TOKEN", "")
 transport = StreamableHttpTransport(FALCON_DATA_MCP, headers={"Dev-Key": FALCON_DATA_MCP_TOKEN})
 adapter = MCPAdapter(Client(transport))
 dwh_docs_mcp_tools = asyncio.run(adapter.list_tools())
+logger.info("tools_init", extra={"dwh_mcp_tools": len(dwh_docs_mcp_tools)})
 
 
 def extract_package_names(sql_query) -> list[str]:
@@ -72,6 +76,7 @@ def extract_package_names(sql_query) -> list[str]:
 
 def _http_call(params: dict, growx_mcp_personal_key: str) -> dict:
     """Call growX MCP server via HTTP JSON-RPC and return parsed result."""
+    tool_name = params.get("name", "unknown")
     with httpx.Client(verify=True, timeout=60) as client:
         headers = {
             "Authorization": f"Bearer {_GROWX_TOKEN}", 
@@ -84,6 +89,7 @@ def _http_call(params: dict, growx_mcp_personal_key: str) -> dict:
             headers=headers,
         )
         resp.raise_for_status()
+        logger.debug("growx_mcp_call", extra={"tool": tool_name, "status": resp.status_code})
         return resp.json()
 
 
@@ -340,6 +346,7 @@ def query_sql(sql: str, runtime: ToolRuntime[UserContext]) -> dict:
         # Every referenced game must be in the allowed list
         disallowed = found_all - allowed_values
         if disallowed:
+            logger.warning("query_access_denied", extra={"disallowed_games": sorted(disallowed), "allowed_games": sorted(allowed_values)})
             return {
                 "columns": [],
                 "rows": [],
@@ -348,11 +355,15 @@ def query_sql(sql: str, runtime: ToolRuntime[UserContext]) -> dict:
             }
 
     ch = get_ch_client()
+    logger.debug("query_sql_executing", extra={"sql": sql[:200]})
     try:
         data, info = ch.execute(sql, with_column_types=True)
         cols = [c[0] for c in info]
-        return {"columns": cols, "rows": [list(r) for r in data], "row_count": len(data), "error": None}
+        row_count = len(data)
+        logger.info("query_sql_success", extra={"rows": row_count, "columns": len(cols)})
+        return {"columns": cols, "rows": [list(r) for r in data], "row_count": row_count, "error": None}
     except Exception as e:
+        logger.warning("query_sql_error", extra={"error": str(e)})
         return {"columns": [], "rows": [], "row_count": 0, "error": str(e)}
 
 
