@@ -1,4 +1,3 @@
-from functools import lru_cache
 from langchain_openai import ChatOpenAI
 from deepagents import create_deep_agent, FilesystemPermission
 from deepagents.backends import CompositeBackend, StateBackend, FilesystemBackend
@@ -10,11 +9,12 @@ from .ua_agent import (
     Context as ua_agent_context,
     State as ua_agent_State,
 )
+from .tools import set_ch_client
 from pymongo import MongoClient
 
 
 agent_map = {
-    "agent_a": {
+    "ua_agent": {
         "system_prompt": ua_agent_system_prompt,
         "model": ChatOpenAI(
             model="falcon-llm",
@@ -34,9 +34,8 @@ agent_map = {
     },
 }
 
-@lru_cache()
-def get_agent(agent_name: str, mongo_client: MongoClient):
-    
+async def init_agent(agent_name: str, mongo_client: MongoClient):
+    """Build and return an agent. Intended to be called during startup only."""
     agent_conf = agent_map[agent_name]
     skill_dir = os.path.join(os.path.dirname(__file__), "skills", agent_name)
 

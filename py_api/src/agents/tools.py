@@ -13,6 +13,25 @@ from langchain.mcp import MCPAdapter
 import asyncio
 
 
+# Global ClickHouse client (initialized in lifespan, closed in shutdown)
+_ch_client: ChClient | None = None
+
+
+def set_ch_client(client: ChClient) -> None:
+    """Set the global ClickHouse client pool. Called during app startup."""
+    global _ch_client
+    _ch_client = client
+
+
+def get_ch_client() -> ChClient:
+    """Get the global ClickHouse client pool. Must be initialized in lifespan first."""
+    if _ch_client is None:
+        raise RuntimeError(
+            "ClickHouse client not initialized. "
+            "Ensure it is set in the lifespan startup phase."
+        )
+    return _ch_client
+
 
 # HTTP client for growX MCP server
 _GROWX_URL = os.getenv("GROWX_MCP_SERVER", "https://growx-dev.falcongames.com/grow-x/api/v1/mcp")
@@ -53,7 +72,7 @@ def extract_package_names(sql_query) -> list[str]:
 
 def _http_call(params: dict, growx_mcp_personal_key: str) -> dict:
     """Call growX MCP server via HTTP JSON-RPC and return parsed result."""
-    with httpx.Client(verify=False, timeout=60) as client:
+    with httpx.Client(verify=True, timeout=60) as client:
         headers = {
             "Authorization": f"Bearer {_GROWX_TOKEN}", 
             "Content-Type": "application/json",
@@ -327,10 +346,10 @@ def query_sql(sql: str, runtime: ToolRuntime[UserContext]) -> dict:
                 "row_count": 0,
                 "error": f"SQL query references games not assigned to user. Disallowed: {sorted(disallowed)}. Allowed: {sorted(allowed_values)}",
             }
-    
-    conn = ChClient.from_url(f"clickhouse://bytehouse:{os.getenv('BYTEHOUSE_KEY')}@gateway.aws-us-east-1.bytehouse.cloud:19000/?secure=true&max_execution_time=60")
+
+    ch = get_ch_client()
     try:
-        data, info = conn.execute(sql, with_column_types=True)
+        data, info = ch.execute(sql, with_column_types=True)
         cols = [c[0] for c in info]
         return {"columns": cols, "rows": [list(r) for r in data], "row_count": len(data), "error": None}
     except Exception as e:

@@ -4,7 +4,6 @@ import tritonclient.grpc.aio as grpcclient
 from pymongo import MongoClient
 from models.entity import User
 from db import get_user
-from agents import get_agent, agent_map
 from langgraph.graph.state import CompiledStateGraph
 
 
@@ -34,7 +33,7 @@ def get_metadata_from_user(user: User) -> dict:
         "n_games": len(user.games)
     }
 
-def get_ai_agent(x_agent_name: str = Header(...)) -> CompiledStateGraph:
-    if x_agent_name not in agent_map:
+async def get_ai_agent(x_agent_name: str = Header(...), request: Request = ...) -> CompiledStateGraph:
+    if x_agent_name not in request.app.state.agents:
         raise HTTPException(status_code=400, detail=f"Unknown agent: {x_agent_name}")
-    return get_agent(x_agent_name)
+    return request.app.state.agents[x_agent_name]

@@ -183,8 +183,6 @@ async def chat(
     ```
     """
     try:
-        req.validate()
-
         context = agent.context_schema(user_id=user.id, games=user.games, growx_mcp_personal_key=x_growx_mcp_personal_key)
         config = {
             "configurable": {"thread_id": req.thread_id}, 
