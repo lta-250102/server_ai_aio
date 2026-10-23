@@ -3,6 +3,7 @@
 *_data/
 .env
 .vscode/
+.claude/
 *.onnx
 *.pt
 *.engine

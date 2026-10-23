@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.base import CheckpointTuple
 from langgraph.graph.state import CompiledStateGraph
 
-from models.dto import ChatRequest, ListThreadsResponse, Message, ThreadDTO
+from models.dto import ChatRequest, ListThreadsResponse, ThreadDTO
 from models.entity import User
 from routers.depends import get_ai_agent, get_current_user, get_metadata_from_user
 from utils import make_serializable
