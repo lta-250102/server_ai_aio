@@ -22,9 +22,13 @@ class StructuredFormatter(logging.Formatter):
     ))
 
     def format(self, record) -> str:
-        # INFO: plain text "LEVEL message"
+        # INFO: plain text "LEVEL message" with extra kwargs as key=value
         if record.levelno == logging.INFO:
-            return f"{record.levelname}:\t  {record.getMessage()}"
+            parts = [f"{record.levelname}:\t  {record.getMessage()}"]
+            for key, val in record.__dict__.items():
+                if key not in self._EXCLUDE and not key.startswith("_"):
+                    parts.append(f"{key}={val}")
+            return " ".join(parts)
 
         # DEBUG / WARNING / ERROR: full JSON
         obj = {

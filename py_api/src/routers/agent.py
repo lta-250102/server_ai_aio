@@ -223,7 +223,7 @@ async def chat(
     {"thread_id": "xyz789", "messages": [{"role": "user", "content": "Phân tích ROAS campaign A"}], "stream": false}
     ```
     """
-    logger.info("chat_start", extra={"user_id": user.id, "thread_id": req.thread_id, "msg_count": len(req.messages), "stream": req.stream})
+    logger.info("chat_start", extra={"user_name": user.user_name, "thread_id": req.thread_id, "msg_count": len(req.messages), "stream": req.stream})
     try:
         context = agent.context_schema(user_id=user.id, games=user.games, growx_mcp_personal_key=x_growx_mcp_personal_key)
         config = {
@@ -289,12 +289,12 @@ async def chat(
                         return_exceptions=True,
                     )
 
-            logger.info("chat_stream_start", extra={"user_id": user.id, "thread_id": req.thread_id})
+            logger.info("chat_stream_start", extra={"user_name": user.user_name, "thread_id": req.thread_id})
             return StreamingResponse(event_generator(), media_type="text/event-stream")
 
         # --- Non-stream mode ---
         response = await agent.ainvoke(input, config=config, context=context)
-        logger.info("chat_success", extra={"user_id": user.id, "thread_id": req.thread_id})
+        logger.info("chat_success", extra={"user_name": user.user_name, "thread_id": req.thread_id})
         return response
     except HTTPException as e:
         logger.warning("chat_http_error", extra={"user_id": user.id, "thread_id": req.thread_id, "status_code": e.status_code, "detail": e.detail})
