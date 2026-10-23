@@ -3,7 +3,7 @@ import uvicorn
 from routers import yolo_router, agent_router, user_router, health_router
 from contextlib import asynccontextmanager
 from services import TritonClient
-from agents import init_agent, agent_map
+from agents import init_agent, agent_map, load_dwh_docs_mcp
 from utils import setup_logging
 from pymongo import MongoClient
 import os
@@ -23,6 +23,7 @@ async def lifespan(app: FastAPI):
         minPoolSize=5,
         maxIdleTimeMS=30000,
     )
+    await load_dwh_docs_mcp()
     app.state.agents = {}
     for name in agent_map:
         app.state.agents[name] = await init_agent(name, app.state.mongo_client)

@@ -21,12 +21,19 @@ _GROWX_URL = os.getenv("GROWX_MCP_SERVER", "https://growx-dev.falcongames.com/gr
 _GROWX_TOKEN = os.getenv("GROWX_MCP_TOKEN", "")
 FALCON_DATA_MCP = os.getenv("FALCON_DATA_MCP_SERVER", "https://dwh-access.data4game.com/mcp")
 FALCON_DATA_MCP_TOKEN = os.getenv("FALCON_DATA_MCP_TOKEN", "")
+BYTEHOUSE_URL = os.getenv("BYTEHOUSE_URL", f"clickhouse://bytehouse:{os.getenv('BYTEHOUSE_KEY')}@gateway.aws-us-east-1.bytehouse.cloud:19000/?secure=true&max_execution_time=60")
 
 
-transport = StreamableHttpTransport(FALCON_DATA_MCP, headers={"Dev-Key": FALCON_DATA_MCP_TOKEN})
-adapter = MCPAdapter(Client(transport))
-dwh_docs_mcp_tools = asyncio.run(adapter.list_tools())
-logger.info("tools_init", extra={"dwh_mcp_tools": len(dwh_docs_mcp_tools)})
+dwh_docs_mcp_tools = []
+
+async def load_dwh_docs_mcp():
+    global dwh_docs_mcp_tools
+    if len(dwh_docs_mcp_tools) != 0:
+        return
+    transport = StreamableHttpTransport(FALCON_DATA_MCP, headers={"Dev-Key": FALCON_DATA_MCP_TOKEN})
+    adapter = MCPAdapter(Client(transport))
+    dwh_docs_mcp_tools = await adapter.list_tools()
+    logger.info("tools_init", extra={"dwh_mcp_tools": len(dwh_docs_mcp_tools)})
 
 
 def extract_package_names(sql_query) -> list[str]:
@@ -334,7 +341,7 @@ def query_sql(sql: str, runtime: ToolRuntime[UserContext]) -> dict:
                 "error": f"SQL query references games not assigned to user. Disallowed: {sorted(disallowed)}. Allowed: {sorted(allowed_values)}",
             }
 
-    ch_client = ChClient.from_url(f"clickhouse://bytehouse:{os.getenv('BYTEHOUSE_KEY')}@gateway.aws-us-east-1.bytehouse.cloud:19000/?secure=true&max_execution_time=60")
+    ch_client = ChClient.from_url(BYTEHOUSE_URL)
     logger.debug("query_sql_executing", extra={"sql": sql[:200]})
     try:
         data, info = ch_client.execute(sql, with_column_types=True)

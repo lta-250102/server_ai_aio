@@ -230,7 +230,10 @@ async def chat(
             "configurable": {"thread_id": req.thread_id}, 
             "metadata": get_metadata_from_user(user),
         }
-        state_snapshot = agent.get_state(config=config)
+        state_snapshot = await agent.aget_state(config=config)
+        if state_snapshot.created_at is not None and user.id != state_snapshot.metadata.get("user_id"):
+            logger.warning("thread_access_denied", extra={"user_id": user.id, "thread_id": req.thread_id})
+            raise HTTPException(status_code=403, detail="Not authorized to chat in this thread")
         thread_name = req.messages[-1].content if state_snapshot.created_at is None else state_snapshot.values.get("thread_name")
         input = {"messages": [{"role": m.role, "content": m.content} for m in req.messages], "thread_name": thread_name}
 

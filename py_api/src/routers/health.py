@@ -45,7 +45,7 @@ async def _check_mongo(request: Request) -> tuple[str, Dict[str, Any]]:
 async def _check_clickhouse(request: Request) -> tuple[str, Dict[str, Any]]:
     """Check ClickHouse via shared sync client in thread pool."""
     try:
-        ch_client = ChClient.from_url(f"clickhouse://bytehouse:{os.getenv('BYTEHOUSE_KEY')}@gateway.aws-us-east-1.bytehouse.cloud:19000/?secure=true&max_execution_time=60")
+        ch_client = ChClient.from_url(os.getenv("BYTEHOUSE_URL"))
         loop = asyncio.get_running_loop()
         # Execute sync execute() in executor
         await loop.run_in_executor(None, ch_client.execute, "SELECT 1 AS ok")

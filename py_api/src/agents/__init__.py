@@ -10,6 +10,7 @@ from .ua_agent import (
     Context as ua_agent_context,
     State as ua_agent_State,
 )
+from .tools import load_dwh_docs_mcp
 from pymongo import MongoClient
 
 
