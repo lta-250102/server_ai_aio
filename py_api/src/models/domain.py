@@ -2,6 +2,8 @@ from pydantic import BaseModel
 
 
 class Game(BaseModel):
+    """A game / mobile application."""
+
     app_id: str
     package_name: str
     app_name: str

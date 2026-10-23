@@ -1,10 +1,14 @@
 from typing import Annotated
+
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
-from .domain import Game
+
+from models.domain import Game
 from utils import objectid_to_str
 
 
 class User(BaseModel):
+    """User entity as returned from the database."""
+
     model_config = ConfigDict(populate_by_name=True)
 
     id: Annotated[str, BeforeValidator(objectid_to_str)] = Field(alias="_id", default=None)

@@ -1,19 +1,24 @@
+"""Shared utility functions for logging, serialization, and BSON handling."""
+
 import json
 import logging
 import sys
 from datetime import datetime, timezone
 from typing import Any
+
 from bson import ObjectId
 
 
 class StructuredFormatter(logging.Formatter):
-    """Output format depends on log level.
+    """Log formatter that emits JSON for DEBUG/WARN/ERROR and plain text for INFO.
 
-    INFO:      plain text "LEVEL message" — clean for normal flow
-    DEBUG/WARN/ERROR: full JSON with extra fields, timestamps, stack traces
+    INFO level produces a concise ``LEVEL:  message`` line with any extra
+    keyword arguments appended as ``key=value`` pairs.  All other levels
+    produce a full JSON object with timestamps, module info and optional
+    exception tracebacks.
     """
 
-    _EXCLUDE = frozenset((
+    _EXCLUDE: frozenset[str] = frozenset((
         "msg", "args", "created", "exc_info", "exc_text", "exc_type",
         "filename", "funcName", "levelname", "levelno", "lineno",
         "message", "module", "msecs", "name", "pathname",
@@ -21,7 +26,7 @@ class StructuredFormatter(logging.Formatter):
         "thread", "threadName", "taskName", "extra",
     ))
 
-    def format(self, record) -> str:
+    def format(self, record: logging.LogRecord) -> str:
         # INFO: plain text "LEVEL message" with extra kwargs as key=value
         if record.levelno == logging.INFO:
             parts = [f"{record.levelname}:\t  {record.getMessage()}"]
@@ -31,7 +36,7 @@ class StructuredFormatter(logging.Formatter):
             return " ".join(parts)
 
         # DEBUG / WARNING / ERROR: full JSON
-        obj = {
+        obj: dict[str, Any] = {
             "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "lvl": record.levelname,
             "name": record.name,
@@ -42,17 +47,16 @@ class StructuredFormatter(logging.Formatter):
         }
         if record.exc_info and record.exc_info[0] is not None:
             obj["err"] = self.formatException(record.exc_info)
-        # Include extra kwargs (logger.info/warn/error("msg", extra={"k": "v"}))
         for key, val in record.__dict__.items():
             if key not in self._EXCLUDE and not key.startswith("_"):
                 obj[key] = val
         return json.dumps(obj, ensure_ascii=False, default=str)
 
 
-def setup_logging(level: str = "INFO"):
-    """Configure the shared pyapi logger with structured JSON output.
+def setup_logging(level: str = "INFO") -> None:
+    """Configure the shared ``pyapi`` logger with structured JSON output.
 
-    Pure built-in, no extra deps.  Call once during app startup (e.g. in lifespan).
+    Call once during application startup (e.g. inside the lifespan).
     """
     logger = logging.getLogger("pyapi")
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
@@ -63,8 +67,11 @@ def setup_logging(level: str = "INFO"):
     handler.setFormatter(StructuredFormatter())
     logger.addHandler(handler)
 
-def objectid_to_str(v):
+
+def objectid_to_str(v: Any) -> Any:
+    """Convert a MongoDB ``ObjectId`` to its string representation."""
     return str(v) if isinstance(v, ObjectId) else v
+
 
 def make_serializable(obj: Any) -> Any:
     """Recursively convert LangChain objects to JSON-serializable types."""
